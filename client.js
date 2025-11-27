@@ -518,6 +518,7 @@ function stopPlayback() {
 }
 
 function recalcFromLeaderTime() {
+  console.log(`recalcFromLeaderTime: audioCtx=${!!audioCtx}, playing=${currentState.playing}, startAtLeaderAudio=${currentState.startAtLeaderAudio}`);
   if (!audioCtx || !currentState.playing || currentState.startAtLeaderAudio === null) return;
   const localAudioNow = audioCtx.currentTime + offsetAudioSec;
   const beatSec = 60 / currentState.bpm;
@@ -527,6 +528,7 @@ function recalcFromLeaderTime() {
   const beatStartLeader = currentState.startAtLeaderAudio + beatNumber * beatSec;
   const offsetSec = beatStartLeader - localAudioNow;
   nextBeatTime = audioCtx.currentTime + Math.max(0, offsetSec);
+  console.log(`recalcFromLeaderTime: nextBeatTime=${nextBeatTime}`);
 }
 
 function schedulerTick() {
