@@ -139,15 +139,25 @@ stopBtn.addEventListener('click', () => {
 
 bpmInput.addEventListener('input', () => {
   currentState.bpm = Number(bpmInput.value);
-  if (isLeader() && currentState.playing) recalcFromLeaderTime();
-  broadcastState();
+  if (isLeader()) {
+    startBtn.disabled = true;
+    calibrateBtn.disabled = false;
+    calibrateBtn.textContent = 'Calibrate';
+    stopPlayback();
+    broadcastState();
+  }
 });
 
 beatsInput.addEventListener('input', () => {
   currentState.beatsPerBar = Number(beatsInput.value);
   renderMeter(currentState.beatsPerBar);
-  if (isLeader() && currentState.playing) recalcFromLeaderTime();
-  broadcastState();
+  if (isLeader()) {
+    startBtn.disabled = true;
+    calibrateBtn.disabled = false;
+    calibrateBtn.textContent = 'Calibrate';
+    stopPlayback();
+    broadcastState();
+  }
 });
 
 leadInInput.addEventListener('input', () => {
