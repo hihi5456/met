@@ -495,21 +495,26 @@ function ensureAudio() {
 }
 
 function startPlayback(startAtLeader) {
+  console.log('startPlayback entered.');
   ensureAudio();
   currentState.startAtLeaderAudio = startAtLeader;
   currentState.playing = true;
   recalcFromLeaderTime();
+  console.log(`startPlayback: schedulerId before setInterval: ${schedulerId}`);
   if (!schedulerId) schedulerId = setInterval(schedulerTick, 20);
+  console.log(`startPlayback: schedulerId after setInterval: ${schedulerId}`);
   startResync();
   startVisualLoop();
 }
 
 function stopPlayback() {
+  console.log('stopPlayback entered.');
   currentState.playing = false;
   currentState.startAtLeaderAudio = null;
   nextBeatTime = null;
   currentBeatIndex = 0;
   if (schedulerId) {
+    console.log(`stopPlayback: Clearing schedulerId: ${schedulerId}`);
     clearInterval(schedulerId);
     schedulerId = null;
   }
@@ -531,10 +536,10 @@ function recalcFromLeaderTime() {
 }
 
 function schedulerTick() {
+  console.log(`schedulerTick: playing=${currentState.playing}, audioCtx=${!!audioCtx}, nextBeatTime=${nextBeatTime}`); // for debugging
   if (!audioCtx || !currentState.playing || nextBeatTime === null) return;
   const lookAhead = 0.06;
   const beatDur = 60 / currentState.bpm;
-  console.log(`schedulerTick: bpm=${currentState.bpm}, beatDur=${beatDur}`); // for debugging
   while (nextBeatTime < audioCtx.currentTime + lookAhead) {
     scheduleClick(nextBeatTime, currentBeatIndex);
     nextBeatTime += beatDur;
