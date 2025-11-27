@@ -47,6 +47,8 @@ let currentState = {
   startAtLeaderAudio: null, // in seconds, leader audio clock
   playing: false,
 };
+let beatSec = 60 / currentState.bpm;
+let barSec = beatSec * currentState.beatsPerBar;
 
 let audioCtx = null;
 let schedulerId = null;
@@ -103,8 +105,6 @@ startBtn.addEventListener('click', () => {
     return;
   }
   ensureAudio();
-  const beatSec = 60 / currentState.bpm;
-  const barSec = beatSec * currentState.beatsPerBar;
   const nowLeaderAudio = audioCtx.currentTime;
   let startAtLeaderAudio = nowLeaderAudio + currentState.leadInMs / 1000;
   startAtLeaderAudio = Math.ceil(startAtLeaderAudio / barSec) * barSec; // snap to next bar
@@ -127,6 +127,8 @@ stopBtn.addEventListener('click', () => {
 
 bpmInput.addEventListener('input', () => {
   currentState.bpm = Number(bpmInput.value);
+  beatSec = 60 / currentState.bpm;
+  barSec = beatSec * currentState.beatsPerBar;
   if (isLeader()) {
     startBtn.disabled = true;
     calibrateBtn.disabled = false;
@@ -140,6 +142,8 @@ bpmInput.addEventListener('input', () => {
 beatsInput.addEventListener('input', () => {
   currentState.beatsPerBar = Number(beatsInput.value);
   renderMeter(currentState.beatsPerBar);
+  beatSec = 60 / currentState.bpm;
+  barSec = beatSec * currentState.beatsPerBar;
   if (isLeader()) {
     startBtn.disabled = true;
     calibrateBtn.disabled = false;
