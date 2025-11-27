@@ -94,24 +94,7 @@ calibrateBtn.addEventListener('click', () => {
     alert('Only the leader can initiate calibration. Take leader and retry.');
     return;
   }
-  // If you're the leader, no need to ping yourself; mark calibrated immediately.
-  if (!directLeaderConn || directLeaderConn.peer === selfId) {
-    ensureAudio();
-    offsetMs = 0;
-    offsetAudioSec = 0;
-    setOffsetStatus(offsetMs);
-    calibrateBtn.textContent = 'Calibrated';
-    calibrateBtn.disabled = false;
-    startBtn.disabled = false;
-    return;
-  }
-  ensureAudio();
-  calibrateBtn.textContent = 'Calibrating…';
-  calibrateBtn.disabled = true;
-  startBtn.disabled = true;
-  offsetSamples.length = 0;
-  startCalibrationTimer();
-  startPing(true);
+  runCalibration();
 });
 
 startBtn.addEventListener('click', () => {
@@ -149,6 +132,7 @@ bpmInput.addEventListener('input', () => {
     calibrateBtn.disabled = false;
     calibrateBtn.textContent = 'Calibrate';
     stopPlayback();
+    autoCalibrate();
     broadcastState();
   }
 });
@@ -161,6 +145,7 @@ beatsInput.addEventListener('input', () => {
     calibrateBtn.disabled = false;
     calibrateBtn.textContent = 'Calibrate';
     stopPlayback();
+    autoCalibrate();
     broadcastState();
   }
 });
@@ -666,6 +651,31 @@ function finishCalibration() {
   calibrateBtn.textContent = 'Calibrated';
   calibrateBtn.disabled = false;
   startBtn.disabled = false;
+}
+
+function runCalibration() {
+  ensureAudio();
+  // If leader is local (self), no need to ping.
+  if (!directLeaderConn || directLeaderConn.peer === selfId) {
+    offsetMs = 0;
+    offsetAudioSec = 0;
+    setOffsetStatus(offsetMs);
+    calibrateBtn.textContent = 'Calibrated';
+    calibrateBtn.disabled = false;
+    startBtn.disabled = false;
+    return;
+  }
+  calibrateBtn.textContent = 'Calibrating…';
+  calibrateBtn.disabled = true;
+  startBtn.disabled = true;
+  offsetSamples.length = 0;
+  startCalibrationTimer();
+  startPing(true);
+}
+
+function autoCalibrate() {
+  if (!isLeader()) return;
+  runCalibration();
 }
 
 renderMeter(currentState.beatsPerBar);
