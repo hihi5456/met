@@ -31,10 +31,12 @@ let leaderId = null;
 let directLeaderConn = null;
 let pingTimer = null;
 let resyncTimer = null;
+let calibrationTimer = null;
 let offsetMs = 0;
 const offsetSamples = [];
 const MAX_OFFSET_SAMPLES = 20;
 const CALIBRATION_SAMPLES = 12;
+const CALIBRATION_TIMEOUT_MS = 2500;
 let peers = new Set();
 let peerCount = 1;
 let currentState = {
@@ -103,6 +105,7 @@ calibrateBtn.addEventListener('click', () => {
   calibrateBtn.disabled = true;
   startBtn.disabled = true;
   offsetSamples.length = 0;
+  startCalibrationTimer();
   startPing(true);
 });
 
@@ -169,6 +172,10 @@ function connect(room) {
         connectToHub();
       } else {
         leaderId = leaderId || selfId;
+        setLeaderStatus('Leader: you');
+        startBtn.disabled = true;
+        calibrateBtn.disabled = false;
+        calibrateBtn.textContent = 'Calibrate';
         broadcastLeader();
         broadcastPeerCount();
       }
@@ -254,6 +261,11 @@ function handleMessage(conn, msg) {
       peers.add(data.id);
       peerCount = peers.size;
       updatePeerCount();
+      if (!leaderId) {
+        leaderId = selfId;
+        setLeaderStatus('Leader: you');
+        broadcastLeader();
+      }
       broadcastPeerCount();
       if (leaderId) send(conn, { type: 'leader', id: leaderId });
       if (currentState) send(conn, { type: 'state', data: currentState });
@@ -315,12 +327,6 @@ function handleMessage(conn, msg) {
     const rtt = t1 - data.t0;
     const newOffset = data.leaderNow - (data.t0 + rtt / 2);
     addOffsetSample(newOffset, data.calibrate === true);
-    if (data.calibrate === true && offsetSamples.length >= CALIBRATION_SAMPLES) {
-      stopPing();
-      calibrateBtn.textContent = 'Calibrated';
-      startBtn.disabled = false;
-      calibrateBtn.disabled = false;
-    }
     return;
   }
 }
@@ -384,16 +390,19 @@ function connectToLeader(id) {
   if (directLeaderConn) {
     directLeaderConn.close();
     stopPing();
+    stopResync();
   }
   directLeaderConn = peer.connect(id, { reliable: true });
   directLeaderConn.on('open', () => {
     startPing();
     startResync();
+    startCalibrationTimer();
   });
   directLeaderConn.on('data', (msg) => handleMessage(directLeaderConn, msg));
   directLeaderConn.on('close', () => {
     stopPing();
     stopResync();
+    stopCalibrationTimer();
     startBtn.disabled = true;
     calibrateBtn.disabled = true;
     calibrateBtn.textContent = 'Calibrate';
@@ -406,7 +415,7 @@ function startPing(isCalibration = false) {
     if (directLeaderConn?.open) {
       send(directLeaderConn, { type: 'ping', t0: performance.now(), calibrate: isCalibration });
     }
-  }, isCalibration ? 200 : 500);
+  }, isCalibration ? 150 : 450);
 }
 
 function stopPing() {
@@ -416,11 +425,25 @@ function stopPing() {
   }
 }
 
+function startCalibrationTimer() {
+  stopCalibrationTimer();
+  calibrationTimer = setTimeout(() => {
+    finishCalibration();
+  }, CALIBRATION_TIMEOUT_MS);
+}
+
+function stopCalibrationTimer() {
+  if (calibrationTimer) {
+    clearTimeout(calibrationTimer);
+    calibrationTimer = null;
+  }
+}
+
 function startResync() {
   stopResync();
   resyncTimer = setInterval(() => {
     recalcFromLeaderTime();
-  }, 800);
+  }, 600);
 }
 
 function stopResync() {
@@ -428,6 +451,7 @@ function stopResync() {
     clearInterval(resyncTimer);
     resyncTimer = null;
   }
+  stopCalibrationTimer();
 }
 
 function applyRemoteState(data) {
@@ -459,7 +483,8 @@ function startPlayback(startAtLeader) {
   currentState.startAtLeader = startAtLeader;
   currentState.playing = true;
   recalcFromLeaderTime();
-  if (!schedulerId) schedulerId = setInterval(schedulerTick, 25);
+  if (!schedulerId) schedulerId = setInterval(schedulerTick, 20);
+  startResync();
 }
 
 function stopPlayback() {
@@ -471,6 +496,7 @@ function stopPlayback() {
     clearInterval(schedulerId);
     schedulerId = null;
   }
+  stopResync();
   highlightBeat(-1);
 }
 
@@ -488,7 +514,7 @@ function recalcFromLeaderTime() {
 
 function schedulerTick() {
   if (!audioCtx || !currentState.playing || nextBeatTime === null) return;
-  const lookAhead = 0.08;
+  const lookAhead = 0.06;
   const beatDur = 60 / currentState.bpm;
   while (nextBeatTime < audioCtx.currentTime + lookAhead) {
     scheduleClick(nextBeatTime, currentBeatIndex);
@@ -565,9 +591,7 @@ function addOffsetSample(sample, isCalibration = false) {
     sorted.length % 2 === 1 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
   setOffsetStatus(offsetMs);
   if (isCalibration && offsetSamples.length >= CALIBRATION_SAMPLES) {
-    calibrateBtn.textContent = 'Calibrated';
-    startBtn.disabled = false;
-    stopPing();
+    finishCalibration();
   }
   // Recalculate schedule promptly if playing.
   recalcFromLeaderTime();
@@ -581,6 +605,7 @@ function teardown() {
   stopPlayback();
   stopPing();
   stopResync();
+  stopCalibrationTimer();
   peers.clear();
   updatePeerCount();
   peer?.destroy();
@@ -592,6 +617,14 @@ function teardown() {
   startBtn.disabled = true;
   calibrateBtn.disabled = false;
   calibrateBtn.textContent = 'Calibrate';
+}
+
+function finishCalibration() {
+  stopPing();
+  stopCalibrationTimer();
+  calibrateBtn.textContent = 'Calibrated';
+  calibrateBtn.disabled = false;
+  startBtn.disabled = false;
 }
 
 renderMeter(currentState.beatsPerBar);
