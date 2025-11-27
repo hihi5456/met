@@ -500,7 +500,6 @@ function startPlayback(startAtLeader) {
   currentState.playing = true;
   recalcFromLeaderTime();
   if (!schedulerId) schedulerId = setInterval(schedulerTick, 20);
-  startResync();
   startVisualLoop();
 }
 
@@ -534,7 +533,6 @@ function schedulerTick() {
   if (!audioCtx || !currentState.playing || nextBeatTime === null) return;
   const lookAhead = 0.06;
   const beatDur = 60 / currentState.bpm;
-  console.log(`schedulerTick: bpm=${currentState.bpm}, beatDur=${beatDur}, nextBeatTime=${nextBeatTime}`);
   while (nextBeatTime < audioCtx.currentTime + lookAhead) {
     scheduleClick(nextBeatTime, currentBeatIndex);
     nextBeatTime += beatDur;
