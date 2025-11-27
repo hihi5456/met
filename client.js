@@ -34,6 +34,8 @@ let resyncTimer = null;
 let calibrationTimer = null;
 let offsetMs = 0;
 let offsetAudioSec = 0;
+let minRtt = Infinity;
+let bestOffset = 0;
 const offsetSamples = [];
 const MAX_OFFSET_SAMPLES = 20;
 const CALIBRATION_SAMPLES = 12;
@@ -337,7 +339,7 @@ function handleMessage(conn, msg) {
     ensureAudio();
     const localAudioNow = audioCtx.currentTime;
     const newOffsetAudio = data.leaderAudioTime - (localAudioNow + rttSec / 2);
-    addOffsetSample(newOffsetAudio, data.calibrate === true);
+    addOffsetSample(newOffsetAudio, rtt, data.calibrate === true);
     return;
   }
 }
@@ -613,18 +615,33 @@ function setOffsetStatus(offset) {
   }
 }
 
-function addOffsetSample(sampleAudioSec, isCalibration = false) {
-  offsetSamples.push(sampleAudioSec);
-  if (offsetSamples.length > MAX_OFFSET_SAMPLES) offsetSamples.shift();
-  const sorted = [...offsetSamples].sort((a, b) => a - b);
-  const mid = Math.floor(sorted.length / 2);
-  offsetAudioSec =
-    sorted.length % 2 === 1 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
-  offsetMs = offsetAudioSec * 1000;
-  setOffsetStatus(offsetMs);
-  if (isCalibration && offsetSamples.length >= CALIBRATION_SAMPLES) {
-    finishCalibration();
+function addOffsetSample(sampleAudioSec, rtt, isCalibration = false) {
+  if (isCalibration) {
+    offsetSamples.push(sampleAudioSec);
+    if (offsetSamples.length > MAX_OFFSET_SAMPLES) offsetSamples.shift();
+    const sorted = [...offsetSamples].sort((a, b) => a - b);
+    const mid = Math.floor(sorted.length / 2);
+    offsetAudioSec =
+      sorted.length % 2 === 1 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+    offsetMs = offsetAudioSec * 1000;
+    setOffsetStatus(offsetMs);
+    if (offsetSamples.length >= CALIBRATION_SAMPLES) {
+      finishCalibration();
+      // After calibration, we use the calibrated offset as the first "best" offset
+      bestOffset = offsetAudioSec;
+      minRtt = Infinity; // Reset minRtt after calibration
+    }
+  } else {
+    // Continuous sync using Christian's algorithm
+    if (rtt < minRtt) {
+      minRtt = rtt;
+      bestOffset = sampleAudioSec;
+    }
+    offsetAudioSec = bestOffset;
+    offsetMs = offsetAudioSec * 1000;
+    setOffsetStatus(offsetMs);
   }
+
   // Recalculate schedule promptly if playing.
   recalcFromLeaderTime();
 }
