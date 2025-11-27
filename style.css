@@ -138,6 +138,18 @@ button.ghost {
   color: var(--muted);
 }
 
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border-radius: 12px;
+  background: rgba(122, 229, 130, 0.1);
+  color: var(--accent);
+  border: 1px solid rgba(122, 229, 130, 0.3);
+  font-size: 14px;
+}
+
 .status {
   display: flex;
   gap: 18px;

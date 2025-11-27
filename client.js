@@ -89,6 +89,15 @@ calibrateBtn.addEventListener('click', () => {
     alert('Only the leader can initiate calibration. Take leader and retry.');
     return;
   }
+  // If you're the leader, no need to ping yourself; mark calibrated immediately.
+  if (!directLeaderConn || directLeaderConn.peer === selfId) {
+    offsetMs = 0;
+    setOffsetStatus(offsetMs);
+    calibrateBtn.textContent = 'Calibrated';
+    calibrateBtn.disabled = false;
+    startBtn.disabled = false;
+    return;
+  }
   calibrateBtn.textContent = 'Calibrating…';
   calibrateBtn.disabled = true;
   startBtn.disabled = true;
@@ -357,6 +366,9 @@ function connectToLeader(id) {
   directLeaderConn.on('close', () => {
     stopPing();
     stopResync();
+    startBtn.disabled = true;
+    calibrateBtn.disabled = true;
+    calibrateBtn.textContent = 'Calibrate';
   });
 }
 
