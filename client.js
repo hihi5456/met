@@ -33,9 +33,10 @@ let pingTimer = null;
 let resyncTimer = null;
 let offsetMs = 0;
 const offsetSamples = [];
-const MAX_OFFSET_SAMPLES = 9;
+const MAX_OFFSET_SAMPLES = 20;
 const CALIBRATION_SAMPLES = 12;
 let peers = new Set();
+let peerCount = 1;
 let currentState = {
   bpm: Number(bpmInput.value),
   beatsPerBar: Number(beatsInput.value),
@@ -162,12 +163,14 @@ function connect(room) {
       registerPeerHandlers();
       setConnectionStatus(isHub ? 'Connected (hub)' : 'Connected');
       peers.add(selfId);
+      peerCount = peers.size;
       updatePeerCount();
       if (!isHub) {
         connectToHub();
       } else {
         leaderId = leaderId || selfId;
         broadcastLeader();
+        broadcastPeerCount();
       }
     })
     .catch((err) => {
@@ -222,18 +225,24 @@ function setupConnection(conn, incoming) {
     }
     if (isHub && incoming) {
       peers.add(conn.peer);
+      peerCount = peers.size;
       updatePeerCount();
+      broadcastPeerCount();
     }
   });
 
   conn.on('data', (msg) => handleMessage(conn, msg));
   conn.on('close', () => {
-    peers.delete(conn.peer);
+    if (isHub && peers.has(conn.peer)) {
+      peers.delete(conn.peer);
+      peerCount = peers.size;
+      updatePeerCount();
+      broadcastPeerCount();
+    }
     if (conn === directLeaderConn) {
       directLeaderConn = null;
       stopPing();
     }
-    updatePeerCount();
   });
 }
 
@@ -243,7 +252,9 @@ function handleMessage(conn, msg) {
   if (isHub) {
     if (data.type === 'hello') {
       peers.add(data.id);
+      peerCount = peers.size;
       updatePeerCount();
+      broadcastPeerCount();
       if (leaderId) send(conn, { type: 'leader', id: leaderId });
       if (currentState) send(conn, { type: 'state', data: currentState });
       return;
@@ -280,6 +291,12 @@ function handleMessage(conn, msg) {
 
   if (data.type === 'state') {
     applyRemoteState(data.data);
+    return;
+  }
+
+  if (data.type === 'peers') {
+    peerCount = data.count;
+    updatePeerCount();
     return;
   }
 
@@ -349,6 +366,17 @@ function broadcastState(excludePeer) {
   } else if (hubConn?.open) {
     send(hubConn, { type: 'state', data: currentState });
   }
+}
+
+function broadcastPeerCount() {
+  if (!isHub) return;
+  const payload = { type: 'peers', count: peers.size };
+  peer.connections &&
+    Object.values(peer.connections).forEach((arr) =>
+      arr.forEach((c) => {
+        if (c.open) send(c, payload);
+      })
+    );
 }
 
 function connectToLeader(id) {
@@ -509,7 +537,7 @@ function highlightBeat(index) {
 }
 
 function updatePeerCount() {
-  peersLabel.textContent = peers.size.toString();
+  peersLabel.textContent = peerCount.toString();
 }
 
 function setConnectionStatus(text) {
