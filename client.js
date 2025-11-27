@@ -180,6 +180,7 @@ function connect(room) {
         startBtn.disabled = true;
         calibrateBtn.disabled = false;
         calibrateBtn.textContent = 'Calibrate';
+        autoCalibrate();
         broadcastLeader();
         broadcastPeerCount();
       }
@@ -297,6 +298,7 @@ function handleMessage(conn, msg) {
       startBtn.disabled = true;
       calibrateBtn.disabled = false;
       calibrateBtn.textContent = 'Calibrate';
+      autoCalibrate();
     } else {
       startBtn.disabled = true;
       calibrateBtn.disabled = true;

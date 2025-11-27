@@ -1,0 +1,278 @@
+/**
+ * client.js - High Precision Network Metronome
+ * Technique: Lookahead Scheduling + Cristian's Algorithm (NTP)
+ */
+
+// ==========================================
+// 1. CONFIGURATION & STATE
+// ==========================================
+const LOOKAHEAD_MS = 25.0;       // How often to look ahead (ms)
+const SCHEDULE_AHEAD_SEC = 0.1;  // How far ahead to schedule audio (sec)
+const SYNC_INTERVAL_MS = 2000;   // How often to re-sync clocks
+
+let audioCtx = null;
+let isPlaying = false;
+let current16thNote = 0;
+let tempo = 120.0;
+let nextNoteTime = 0.0;          // When the next note is due (AudioContext time)
+let timerWorker = null;          // The setInterval timer (or worker)
+
+// Network Sync State
+let timeOffset = 0;              // GlobalTime = LocalTime + timeOffset
+let isLeader = false;
+let peer = null;
+let connections = [];            // List of connected peers (if leader)
+let leaderConn = null;           // Connection to leader (if follower)
+
+// ==========================================
+// 2. AUDIO ENGINE (Web Audio API)
+// ==========================================
+
+function initAudio() {
+    if (!audioCtx) {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    }
+    // iOS Unlock: Resume context on user interaction
+    if (audioCtx.state === 'suspended') {
+        audioCtx.resume();
+    }
+}
+
+function scheduleNote(beatNumber, time) {
+    // Create an oscillator for the beep
+    const osc = audioCtx.createOscillator();
+    const envelope = audioCtx.createGain();
+
+    osc.connect(envelope);
+    envelope.connect(audioCtx.destination);
+
+    // Sound Design: High pitch on beat 0 (Downbeat), Low on others
+    if (beatNumber % 4 === 0) {
+        osc.frequency.value = 880.0; // A5
+    } else if (beatNumber % 4 === 1 || beatNumber % 4 === 3) {
+        osc.frequency.value = 0; // Silence (for visual only) or lower pitch
+        // Standard metronome usually ticks on quarter notes (every 4th 16th note)
+        // If you want 16th notes: use 440.0. 
+        // For standard quarter note click:
+        osc.frequency.value = 440.0; 
+    } else {
+         // Off-beats (optional: make silent or very quiet)
+         osc.frequency.value = 0; 
+    }
+
+    // Only play sound on Quarter Notes (0, 4, 8, 12)
+    if (beatNumber % 4 === 0) {
+        osc.start(time);
+        osc.stop(time + 0.05); // Short blip (50ms)
+        
+        envelope.gain.setValueAtTime(1, time);
+        envelope.gain.exponentialRampToValueAtTime(0.001, time + 0.05);
+    }
+}
+
+function nextNote() {
+    const secondsPerBeat = 60.0 / tempo;
+    // We calculate 16th notes for finer granularity
+    nextNoteTime += 0.25 * secondsPerBeat;
+    current16thNote++;
+    if (current16thNote === 16) {
+        current16thNote = 0;
+    }
+}
+
+function scheduler() {
+    // While there are notes that will need to play before the next interval,
+    // schedule them and advance the pointer.
+    while (nextNoteTime < audioCtx.currentTime + SCHEDULE_AHEAD_SEC) {
+        scheduleNote(current16thNote, nextNoteTime);
+        nextNote();
+    }
+}
+
+function startScheduler() {
+    if (isPlaying) return;
+    initAudio();
+    isPlaying = true;
+    current16thNote = 0;
+    
+    // The "Loop"
+    timerWorker = setInterval(() => {
+        scheduler();
+    }, LOOKAHEAD_MS);
+}
+
+function stopScheduler() {
+    isPlaying = false;
+    clearInterval(timerWorker);
+}
+
+// ==========================================
+// 3. CLOCK SYNCHRONIZATION (Cristian's Algorithm)
+// ==========================================
+
+function getGlobalTime() {
+    return Date.now() + timeOffset;
+}
+
+// Only Followers run this
+async function synchronizeClock() {
+    if (isLeader || !leaderConn) return;
+
+    const start = Date.now();
+    leaderConn.send({ type: 'PING', clientTime: start });
+}
+
+// ==========================================
+// 4. NETWORK LOGIC (PeerJS)
+// ==========================================
+
+function initPeer(id = null) {
+    peer = id ? new Peer(id) : new Peer(); // Auto-id if null
+
+    peer.on('open', (id) => {
+        console.log('My ID:', id);
+        document.getElementById('my-id-display').innerText = id;
+    });
+
+    peer.on('connection', (conn) => {
+        // I am likely the LEADER if people connect to me
+        handleConnection(conn);
+    });
+}
+
+function connectToPeer(peerId) {
+    const conn = peer.connect(peerId);
+    handleConnection(conn);
+}
+
+function handleConnection(conn) {
+    conn.on('open', () => {
+        console.log('Connected to:', conn.peer);
+        
+        if (!isLeader) {
+            // If I connected to someone, I am a Follower. Sync immediately.
+            leaderConn = conn;
+            synchronizeClock();
+            // Keep syncing periodically to handle drift
+            setInterval(synchronizeClock, SYNC_INTERVAL_MS);
+        } else {
+            // I am Leader
+            connections.push(conn);
+        }
+    });
+
+    conn.on('data', (data) => {
+        handleData(data, conn);
+    });
+}
+
+function handleData(data, conn) {
+    const now = Date.now();
+
+    switch (data.type) {
+        case 'PING':
+            // Leader replies with SERVER time
+            conn.send({ 
+                type: 'PONG', 
+                clientTime: data.clientTime, 
+                serverTime: now 
+            });
+            break;
+
+        case 'PONG':
+            // Follower calculates offset
+            const rtt = now - data.clientTime;
+            // Estimated Server Time = data.serverTime + (rtt / 2)
+            // Offset = EstimatedServerTime - LocalTime
+            const estimatedServerTime = data.serverTime + (rtt / 2);
+            const newOffset = estimatedServerTime - now;
+            
+            // Simple smoothing (Alpha filter)
+            if (timeOffset === 0) timeOffset = newOffset;
+            else timeOffset = (timeOffset * 0.7) + (newOffset * 0.3);
+            
+            console.log(`Synced. Offset: ${timeOffset.toFixed(2)}ms, RTT: ${rtt}ms`);
+            break;
+
+        case 'START_AT':
+            // Follower starts at future time
+            initAudio(); // Ensure context is ready
+            const waitMs = data.startTime - getGlobalTime();
+            
+            if (waitMs > 0) {
+                // Schedule the first note
+                nextNoteTime = audioCtx.currentTime + (waitMs / 1000);
+                startScheduler();
+                console.log(`Starting in ${waitMs}ms`);
+            } else {
+                console.warn("Packet arrived too late for scheduled start!");
+            }
+            break;
+
+        case 'STOP':
+            stopScheduler();
+            break;
+    }
+}
+
+// ==========================================
+// 5. UI & CONTROLS
+// ==========================================
+
+// Call this when user clicks "Create Room" (Becomes Leader)
+function createRoom() {
+    isLeader = true;
+    initPeer(); 
+    // Show "Share this ID" UI...
+}
+
+// Call this when user clicks "Join" (Becomes Follower)
+function joinRoom(leaderId) {
+    isLeader = false;
+    initPeer(); // Random ID
+    // Wait for open, then connect
+    peer.on('open', () => {
+        connectToPeer(leaderId);
+    });
+}
+
+// Call this when Leader clicks "Start Metronome"
+function startMetronome() {
+    if (!isLeader) return;
+
+    initAudio();
+    const bufferMs = 1000; // Give everyone 1 second to prepare
+    const globalNow = getGlobalTime();
+    const targetStartTime = globalNow + bufferMs;
+
+    // 1. Send command to all followers
+    connections.forEach(conn => {
+        conn.send({ type: 'START_AT', startTime: targetStartTime });
+    });
+
+    // 2. Schedule my own start
+    const waitMs = targetStartTime - globalNow; // Should be ~1000ms
+    nextNoteTime = audioCtx.currentTime + (waitMs / 1000);
+    startScheduler();
+}
+
+function stopMetronome() {
+    stopScheduler();
+    if (isLeader) {
+        connections.forEach(conn => conn.send({ type: 'STOP' }));
+    }
+}
+
+// --- DOM EVENT LISTENERS (Example) ---
+// Adjust IDs to match your index.html
+document.addEventListener('DOMContentLoaded', () => {
+    document.getElementById('btn-create').addEventListener('click', createRoom);
+    
+    document.getElementById('btn-join').addEventListener('click', () => {
+        const id = document.getElementById('input-leader-id').value;
+        joinRoom(id);
+    });
+
+    document.getElementById('btn-start').addEventListener('click', startMetronome);
+    document.getElementById('btn-stop').addEventListener('click', stopMetronome);
+});
