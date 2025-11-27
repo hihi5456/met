@@ -473,6 +473,8 @@ function applyRemoteState(data) {
   beatsInput.value = currentState.beatsPerBar;
   leadInInput.value = currentState.leadInMs;
   renderMeter(currentState.beatsPerBar);
+  beatSec = 60 / currentState.bpm;
+  barSec = beatSec * currentState.beatsPerBar;
 
   if (data.playing && data.startAtLeaderAudio !== null) {
     ensureAudio();
@@ -532,6 +534,7 @@ function schedulerTick() {
   if (!audioCtx || !currentState.playing || nextBeatTime === null) return;
   const lookAhead = 0.06;
   const beatDur = 60 / currentState.bpm;
+  console.log(`schedulerTick: bpm=${currentState.bpm}, beatDur=${beatDur}`); // for debugging
   while (nextBeatTime < audioCtx.currentTime + lookAhead) {
     scheduleClick(nextBeatTime, currentBeatIndex);
     nextBeatTime += beatDur;
