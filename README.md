@@ -13,11 +13,11 @@ Minimal multi-user metronome that syncs over the same Wi‑Fi using WebRTC with 
 - To serve locally (optional): `npm install` (once), `npm start`, find your LAN IP, and open `http://<LAN_IP>:3000` on all devices (same Wi‑Fi).
 - In the page: enter a room and Connect. First to connect claims the room hub; tap “Become leader” on any device to lead. Tap Start after the lead-in.
 
-## Deploy to GitHub Pages (repo: hihi5456/met)
+## Deploy to GitHub Pages (repo: kimguibo/met)
 1. Ensure `index.html`, `style.css`, `client.js` are in the repo root (already done).
 2. Push to `main`.
 3. GitHub → Settings → Pages → Source: “Deploy from a branch”; Branch: `main`; Path: `/ (root)` → Save.
-4. Visit `https://hihi5456.github.io/met/` on phones (same Wi‑Fi or Internet).
+4. Visit `https://kimguibo.github.io/met/` on phones (same Wi‑Fi or Internet).
 
 ## Development (this container)
 - You can still run `npm install` and `npm start` to serve the static files locally for testing; port-forward `3000` if needed.
