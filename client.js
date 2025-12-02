@@ -53,6 +53,7 @@ let barSec = beatSec * currentState.beatsPerBar;
 let audioCtx = null;
 let schedulerId = null;
 let nextBeatTime = null;
+let pendingPlayback = false;
 let currentBeatIndex = 0;
 let visualRaf = null;
 
@@ -276,15 +277,14 @@ function handleMessage(conn, msg) {
       if (currentState) send(conn, { type: 'state', data: currentState });
       return;
     }
+    // For leader and state changes, the hub's job is just to broadcast.
+    // After broadcasting, it will fall through to the common logic below
+    // to update its own state, just like any other peer.
     if (data.type === 'leader') {
-      leaderId = data.id;
       broadcastLeader(conn.peer);
-      return;
     }
     if (data.type === 'state') {
-      currentState = data.data;
       broadcastState(conn.peer);
-      return;
     }
   }
 
@@ -405,10 +405,8 @@ function connectToLeader(id) {
   if (directLeaderConn) {
     directLeaderConn.close();
     stopPing();
-    stopContinuousSync(); // Use the new stop function
-  }
   offsetSamples.length = 0;
-  setOffsetStatus('Offset: —');
+  setOffsetStatus('Calibrating…');
 
   directLeaderConn = peer.connect(id, { reliable: true });
   directLeaderConn.on('open', () => {
@@ -449,8 +447,14 @@ function applyRemoteState(data) {
 
   if (data.playing && data.startAtLeaderAudio !== null) {
     ensureAudio();
-    startPlayback(data.startAtLeaderAudio);
+    if (offsetSamples.length === 0) {
+      // We're not calibrated yet. Wait until calibration finishes.
+      pendingPlayback = true;
+    } else {
+      startPlayback(data.startAtLeaderAudio);
+    }
   } else if (!data.playing) {
+    pendingPlayback = false; // Reset if we get a stop message
     stopPlayback();
   }
   startBtn.disabled = true;
@@ -679,9 +683,17 @@ function finishCalibration() {
   stopCalibrationTimer();
   pingIntervalMs = 5000; // Revert to slow ping for continuous sync
   startPing(pingIntervalMs); // Restart pinging at the continuous rate
-  calibrateBtn.textContent = 'Calibrated';
-  calibrateBtn.disabled = false;
-  startBtn.disabled = false;
+
+  if (pendingPlayback && currentState.startAtLeaderAudio) {
+    startPlayback(currentState.startAtLeaderAudio);
+    pendingPlayback = false;
+  }
+
+  if (isLeader()) {
+    calibrateBtn.textContent = 'Calibrated';
+    calibrateBtn.disabled = false;
+    startBtn.disabled = false;
+  }
 }
 
 function runCalibration() {
