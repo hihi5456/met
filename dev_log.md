@@ -24,3 +24,19 @@
 - Auto-calibration added after BPM/TS changes and on leader assignment.
 - Beat/bar durations recomputed on BPM/TS change; start snaps to next bar using current values.
 - Audio-clock–based offset and scheduling; visuals driven via `requestAnimationFrame` on the audio clock.
+- **Improved Synchronization Accuracy**:
+    - Implemented a robust statistical method for clock offset calculation in `addOffsetSample`. This involves maintaining a sliding window of recent samples, filtering outliers based on RTT standard deviation, and calculating the average offset from filtered samples.
+    - Replaced the less robust `minRtt` and `bestOffset` variables with this new method.
+    - Refactored `startPing` to support flexible ping rates, enabling both fast calibration and slower continuous syncing.
+    - Introduced `startContinuousSync` and `stopContinuousSync` to manage continuous background pinging (default 5-second interval) to maintain sync over time.
+    - Enhanced `runCalibration` to use a faster ping rate (150ms for 2 seconds) for rapid initial calibration.
+    - Adjusted `finishCalibration` to revert to the continuous sync rate after the initial calibration burst.
+    - Removed the redundant `resyncTimer` as metronome schedule recalculation is now handled directly by `addOffsetSample` upon each new offset determination.
+    - Updated `recalcFromLeaderTime`'s guard condition to correctly check for an established offset using `offsetSamples.length`.
+- **Fixed "Two Leaders" Bug**:
+    - Modified the `handleMessage` function to ensure that the hub correctly processes leader change messages for itself, preventing a "split-brain" scenario where multiple clients believe they are the leader.
+- **Fixed "Follower Not Starting" Bug**:
+    - Introduced a `pendingPlayback` flag: if a follower receives a "start" command before its initial calibration is complete, it now stores this command and automatically begins playback once calibration is successfully finished.
+    - Updated `applyRemoteState` and `finishCalibration` to correctly implement this logic.
+- **Improved Calibration Feedback**:
+    - Enhanced the user interface feedback during calibration by setting the `offsetStatus` to "Calibrating…" when a follower connects and begins its automatic synchronization. This message is then replaced by the calculated offset value once calibration is complete.
