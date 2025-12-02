@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Sync Metronome</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <main class="page">
+      <header class="hero">
+        <div>
+          <p class="eyebrow">LAN WebRTC Metronome</p>
+          <h1>Stay on the same beat</h1>
+          <p class="lede">
+            Host in your browser, share a room code on the same Wi‑Fi, and keep visual + audio ticks in sync.
+          </p>
+        </div>
+        <div class="pill">Dev server only; no external hosting needed.</div>
+      </header>
+
+      <section class="panel">
+        <div class="field-row">
+          <label for="room">Room</label>
+          <input id="room" type="text" placeholder="e.g. rehearsal1" />
+          <button id="connect">Connect</button>
+          <button id="disconnect" class="ghost">Disconnect</button>
+        </div>
+        <div class="status">
+          <span id="connectionStatus">Disconnected</span>
+          <span id="leaderStatus">—</span>
+          <span id="offsetStatus">Offset: —</span>
+        </div>
+        <div class="leader-row">
+          <button id="becomeLeader" class="ghost">Become leader</button>
+          <span class="muted">Any user can take the lead; first in the room is leader by default.</span>
+        </div>
+        <div class="share-row">
+          <label for="shareUrl">Share this URL on Wi‑Fi</label>
+          <input id="shareUrl" type="text" readonly />
+          <button id="copyUrl" class="ghost">Copy</button>
+        </div>
+        <div class="field-grid">
+          <div class="input-group-with-button">
+            <label for="bpm">BPM</label>
+            <input id="bpm" type="number" min="30" max="240" value="100" />
+            <button id="tapTempo" class="ghost">Tap</button>
+          </div>
+          <label>Beats/Bar <input id="beats" type="number" min="1" max="12" value="4" /></label>
+          <label>Lead-in (ms) <input id="leadIn" type="number" min="0" max="4000" value="400" /></label>
+        </div>
+        <div class="controls">
+          <button id="calibrate">Calibrate</button>
+          <button id="start" disabled>Start</button>
+          <button id="stop" class="ghost">Stop</button>
+          <label class="inline">
+            <input id="mute" type="checkbox" />
+            Mute clicks
+          </label>
+        </div>
+        <div class="peers">
+          Peers: <span id="peers">0</span>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Visual tick</h2>
+        <div id="meter" class="meter"></div>
+      </section>
+
+      <section class="panel">
+        <h2>Notes</h2>
+        <ul>
+          <li>First person in a room becomes leader. If leader leaves, next peer takes over.</li>
+          <li>Press Start after a brief lead-in so followers align.</li>
+          <li>Audio starts only after a user gesture (tap a button) due to browser policy.</li>
+        </ul>
+      </section>
+    </main>
+
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <script src="client.js"></script>
+  </body>
+</html>

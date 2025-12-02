@@ -34,12 +34,10 @@ let resyncTimer = null;
 let calibrationTimer = null;
 let offsetMs = 0;
 let offsetAudioSec = 0;
-let minRtt = Infinity;
-let bestOffset = 0;
-const offsetSamples = [];
-const MAX_OFFSET_SAMPLES = 20;
-const CALIBRATION_SAMPLES = 12;
-const CALIBRATION_TIMEOUT_MS = 2500;
+let pingIntervalMs = 450;
+let offsetSamples = []; // Stores objects like { offset: number, rtt: number }
+const MAX_OFFSET_SAMPLES = 20; // Number of samples to keep in the sliding window
+
 let peers = new Set();
 let peerCount = 1;
 let currentState = {
@@ -328,14 +326,12 @@ function handleMessage(conn, msg) {
 
   if (data.type === 'ping' && isLeader()) {
     ensureAudio();
-    send(conn, {
-      type: 'pong',
-      t0: data.t0,
-      leaderNow: performance.now(),
-      leaderAudioTime: audioCtx.currentTime,
-      calibrate: data.calibrate === true,
-    });
-    return;
+          send(conn, {
+            type: 'pong',
+            t0: data.t0,
+            leaderNow: performance.now(),
+            leaderAudioTime: audioCtx.currentTime,
+          });    return;
   }
 
   if (data.type === 'pong' && directLeaderConn && conn.peer === directLeaderConn.peer) {
@@ -345,7 +341,7 @@ function handleMessage(conn, msg) {
     ensureAudio();
     const localAudioNow = audioCtx.currentTime;
     const newOffsetAudio = data.leaderAudioTime - (localAudioNow + rttSec / 2);
-    addOffsetSample(newOffsetAudio, rtt, data.calibrate === true);
+    addOffsetSample(newOffsetAudio, rtt);
     return;
   }
 }
@@ -409,24 +405,20 @@ function connectToLeader(id) {
   if (directLeaderConn) {
     directLeaderConn.close();
     stopPing();
-    stopResync();
+    stopContinuousSync(); // Use the new stop function
   }
-  minRtt = Infinity;
-  bestOffset = 0;
-  offsetAudioSec = 0;
   offsetSamples.length = 0;
   setOffsetStatus('Offset: —');
 
   directLeaderConn = peer.connect(id, { reliable: true });
   directLeaderConn.on('open', () => {
-    startPing();
-    startResync();
+    startContinuousSync(); // Start the continuous sync
     startCalibrationTimer();
   });
   directLeaderConn.on('data', (msg) => handleMessage(directLeaderConn, msg));
   directLeaderConn.on('close', () => {
     stopPing();
-    stopResync();
+    stopContinuousSync(); // Use the new stop function
     stopCalibrationTimer();
     startBtn.disabled = true;
     calibrateBtn.disabled = true;
@@ -434,49 +426,16 @@ function connectToLeader(id) {
   });
 }
 
-function startPing(isCalibration = false) {
-  stopPing();
-  pingTimer = setInterval(() => {
-    if (directLeaderConn?.open) {
-      send(directLeaderConn, { type: 'ping', t0: performance.now(), calibrate: isCalibration });
-    }
-  }, isCalibration ? 150 : 450);
+function startContinuousSync() {
+  stopContinuousSync(); // Ensure no multiple timers
+  pingIntervalMs = 5000; // Default slow ping for continuous sync (e.g., every 5 seconds)
+  startPing(pingIntervalMs);
+  // The recalculation is now handled by addOffsetSample, which is called on each pong
 }
 
-function stopPing() {
-  if (pingTimer) {
-    clearInterval(pingTimer);
-    pingTimer = null;
-  }
-}
-
-function startCalibrationTimer() {
-  stopCalibrationTimer();
-  calibrationTimer = setTimeout(() => {
-    finishCalibration();
-  }, CALIBRATION_TIMEOUT_MS);
-}
-
-function stopCalibrationTimer() {
-  if (calibrationTimer) {
-    clearTimeout(calibrationTimer);
-    calibrationTimer = null;
-  }
-}
-
-function startResync() {
-  stopResync();
-  resyncTimer = setInterval(() => {
-    recalcFromLeaderTime();
-  }, 600);
-}
-
-function stopResync() {
-  if (resyncTimer) {
-    clearInterval(resyncTimer);
-    resyncTimer = null;
-  }
-  stopCalibrationTimer();
+function stopContinuousSync() {
+  stopPing(); // Stop the pinging
+  // No separate resync timer anymore
 }
 
 function applyRemoteState(data) {
@@ -534,7 +493,7 @@ function stopPlayback() {
 
 function recalcFromLeaderTime() {
   // Don't calculate timing until we have an offset from the leader.
-  if (!isLeader() && minRtt === Infinity) return;
+  if (!isLeader() && offsetSamples.length === 0) return;
 
   if (!audioCtx || !currentState.playing || currentState.startAtLeaderAudio === null) return;
   const localAudioNow = audioCtx.currentTime + offsetAudioSec;
@@ -634,32 +593,50 @@ function setOffsetStatus(offset) {
   }
 }
 
-function addOffsetSample(sampleAudioSec, rtt, isCalibration = false) {
-  if (isCalibration) {
-    offsetSamples.push(sampleAudioSec);
-    if (offsetSamples.length > MAX_OFFSET_SAMPLES) offsetSamples.shift();
-    const sorted = [...offsetSamples].sort((a, b) => a - b);
-    const mid = Math.floor(sorted.length / 2);
-    offsetAudioSec =
-      sorted.length % 2 === 1 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
-    offsetMs = offsetAudioSec * 1000;
-    setOffsetStatus(offsetMs);
-    if (offsetSamples.length >= CALIBRATION_SAMPLES) {
-      finishCalibration();
-      // After calibration, we use the calibrated offset as the first "best" offset
-      bestOffset = offsetAudioSec;
-      minRtt = Infinity; // Reset minRtt after calibration
-    }
-  } else {
-    // Continuous sync using Christian's algorithm
-    if (rtt < minRtt) {
-      minRtt = rtt;
-      bestOffset = sampleAudioSec;
-    }
-    offsetAudioSec = bestOffset;
-    offsetMs = offsetAudioSec * 1000;
-    setOffsetStatus(offsetMs);
+function addOffsetSample(newOffsetAudioSec, rtt) {
+  // Add new sample
+  offsetSamples.push({ offset: newOffsetAudioSec, rtt: rtt });
+  if (offsetSamples.length > MAX_OFFSET_SAMPLES) {
+    offsetSamples.shift(); // Remove oldest sample
   }
+
+  // Ensure we have enough samples to perform meaningful statistics
+  if (offsetSamples.length < 3) { // Need at least 3 samples to calculate std dev
+    const sum = offsetSamples.reduce((acc, s) => acc + s.offset, 0);
+    offsetAudioSec = sum / offsetSamples.length;
+    offsetMs = offsetAudioSec * 1000;
+    setOffsetStatus(offsetMs);
+    recalcFromLeaderTime();
+    return;
+  }
+
+  // 1. Calculate median RTT and std deviation of RTTs
+  const rtts = offsetSamples.map(s => s.rtt).sort((a, b) => a - b);
+  const mid = Math.floor(rtts.length / 2);
+  const medianRtt = rtts.length % 2 === 1 ? rtts[mid] : (rtts[mid - 1] + rtts[mid]) / 2;
+
+  const meanRtt = rtts.reduce((acc, r) => acc + r, 0) / rtts.length;
+  const stdDevRtt = Math.sqrt(rtts.map(r => (r - meanRtt) ** 2).reduce((acc, val) => acc + val, 0) / rtts.length);
+
+  // 2. Filter out outliers based on RTT
+  const filteredSamples = offsetSamples.filter(s => {
+    // Keep samples within 1.5 standard deviations from the median RTT
+    return Math.abs(s.rtt - medianRtt) <= 1.5 * stdDevRtt;
+  });
+
+  // If filtering removed all samples, fall back to unfiltered median offset
+  if (filteredSamples.length === 0) {
+    const offsets = offsetSamples.map(s => s.offset).sort((a, b) => a - b);
+    const medianOffset = offsets.length % 2 === 1 ? offsets[Math.floor(offsets.length / 2)] : (offsets[Math.floor(offsets.length / 2) - 1] + offsets[Math.floor(offsets.length / 2)]) / 2;
+    offsetAudioSec = medianOffset;
+  } else {
+    // 3. Calculate average offset from filtered samples
+    const sumOffset = filteredSamples.reduce((acc, s) => acc + s.offset, 0);
+    offsetAudioSec = sumOffset / filteredSamples.length;
+  }
+
+  offsetMs = offsetAudioSec * 1000;
+  setOffsetStatus(offsetMs);
 
   // Recalculate schedule promptly if playing.
   recalcFromLeaderTime();
@@ -671,8 +648,7 @@ function isLeader() {
 
 function teardown() {
   stopPlayback();
-  stopPing();
-  stopResync();
+  stopContinuousSync();
   stopCalibrationTimer();
   peers.clear();
   updatePeerCount();
@@ -687,18 +663,22 @@ function teardown() {
   calibrateBtn.textContent = 'Calibrate';
   bpmInput.disabled = false;
   beatsInput.disabled = false;
-  leadInInput.disabled = false;
-
-  minRtt = Infinity;
-  bestOffset = 0;
-  offsetAudioSec = 0;
   offsetSamples.length = 0;
   setOffsetStatus('Offset: —');
 }
 
-function finishCalibration() {
-  stopPing();
+function startCalibrationTimer() {
   stopCalibrationTimer();
+  // Set a timeout for the calibration burst
+  calibrationTimer = setTimeout(() => {
+    finishCalibration();
+  }, 2000); // Calibrate for 2 seconds with fast pings
+}
+
+function finishCalibration() {
+  stopCalibrationTimer();
+  pingIntervalMs = 5000; // Revert to slow ping for continuous sync
+  startPing(pingIntervalMs); // Restart pinging at the continuous rate
   calibrateBtn.textContent = 'Calibrated';
   calibrateBtn.disabled = false;
   startBtn.disabled = false;
@@ -719,9 +699,10 @@ function runCalibration() {
   calibrateBtn.textContent = 'Calibrating…';
   calibrateBtn.disabled = true;
   startBtn.disabled = true;
-  offsetSamples.length = 0;
-  startCalibrationTimer();
-  startPing(true);
+  offsetSamples.length = 0; // Clear samples for fresh calibration
+  pingIntervalMs = 150; // Set fast ping for calibration burst
+  startPing(pingIntervalMs); // Start fast pinging
+  startCalibrationTimer(); // Start timer to end the calibration burst
 }
 
 function autoCalibrate() {
