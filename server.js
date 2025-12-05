@@ -8,6 +8,13 @@ const rootDir = __dirname;
 
 const server = http.createServer((req, res) => {
   let pathname = decodeURIComponent(req.url.split('?')[0]);
+
+  if (pathname === '/now') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ now: performance.now() }));
+    return;
+  }
+
   if (pathname === '/') pathname = '/index.html';
   const filePath = path.join(rootDir, path.normalize(pathname).replace(/^(\.\.(\/|\\|$))+/, ''));
 

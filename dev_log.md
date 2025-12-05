@@ -12,12 +12,13 @@
 - No dedicated time anchor; the leader's clock is the anchor, so path jitter between the leader and followers can affect offset accuracy.
 
 ## Next Options
-- Add a Tap Tempo feature for intuitive BPM setting.
-- Add a tiny LAN `/now` endpoint to use as a time anchor (best for sync on same Wi‑Fi).
-- Increase lead-in and sample count during calibration.
 - Optionally swap to Tone.js Transport for simpler scheduling (still needs a reliable clock source).
 
 ## Recent Changes
+- **Project Cleanup**: Removed outdated `mystrategy.txt` and `requirements.txt` files.
+- **Increased Calibration Precision**: Increased the lead-in time and the number of samples used in calibration for more accurate synchronization.
+- **Added LAN Time Anchor**: Added a `/now` endpoint to the server to act as a time anchor. The client now calibrates to this server time for improved sync accuracy.
+- **Added Tap Tempo**: Added a "Tap" button to allow users to set the BPM by tapping.
 - **Fixed `Uncaught SyntaxError: Unexpected end of input`**: Corrected a missing closing brace in the `connectToLeader` function in `client.js`.
 - **Fixed `Uncaught ReferenceError: stopPing is not defined`**: Implemented the missing `startPing` and `stopPing` functions in `client.js` to properly manage the ping timer, resolving disconnection issues for both leader and follower.
 - **Fixed Follower Calibration Logic**:

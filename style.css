@@ -131,6 +131,10 @@ button.ghost {
   margin-top: 8px;
 }
 
+#tapBtn {
+  margin-bottom: 8px;
+}
+
 .inline {
   display: inline-flex;
   align-items: center;
