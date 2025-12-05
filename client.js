@@ -679,6 +679,13 @@ function teardown() {
   setOffsetStatus('Offset: —');
 }
 
+function stopCalibrationTimer() {
+  if (calibrationTimer) {
+    clearTimeout(calibrationTimer);
+    calibrationTimer = null;
+  }
+}
+
 function startCalibrationTimer() {
   stopCalibrationTimer();
   calibrationTimer = setTimeout(() => {
