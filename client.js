@@ -64,6 +64,7 @@ let currentState = {
   beatsPerBar: Number(beatsInput.value),
   leadInMs: 500,
   startAtLeaderAudio: null, // in seconds, leader audio clock
+  leaderOutputLatencySec: 0,
   playing: false,
 };
 let beatSec = 60 / currentState.bpm;
@@ -95,6 +96,7 @@ connectBtn.addEventListener('click', () => {
     return;
   }
   if (peer) return;
+  ensureAudio();
   connect(room);
 });
 
@@ -359,6 +361,7 @@ function handleMessage(conn, msg) {
       t1,
       t2,
       leaderAudioTime,
+      leaderOutputLatencySec: getOutputLatencySec(),
     });
     return;
   }
@@ -370,15 +373,23 @@ function handleMessage(conn, msg) {
     ensureAudio();
     const localAudioNow = audioCtx.currentTime;
     let newOffsetAudio;
+    const leaderLatencySec = Number.isFinite(data.leaderOutputLatencySec)
+      ? data.leaderOutputLatencySec
+      : 0;
+    const localLatencySec = getOutputLatencySec();
     if (Number.isFinite(data.t1) && Number.isFinite(data.t2)) {
       // NTP-style offset in perf clock, then map leader audio time to receive instant.
       const offsetPerf = ((data.t1 - data.t0) + (data.t2 - t3)) / 2;
       const leaderTimeAtT3 = t3 + offsetPerf;
       const leaderAudioAtT3 = data.leaderAudioTime + (leaderTimeAtT3 - data.t2) / 1000;
-      newOffsetAudio = leaderAudioAtT3 - localAudioNow;
+      const leaderAudibleAtT3 = leaderAudioAtT3 + leaderLatencySec;
+      const localAudibleNow = localAudioNow + localLatencySec;
+      newOffsetAudio = leaderAudibleAtT3 - localAudibleNow;
     } else {
       // Fallback to simple RTT/2 estimate.
-      newOffsetAudio = data.leaderAudioTime + rttSec / 2 - localAudioNow;
+      const leaderAudibleAtT3 = data.leaderAudioTime + leaderLatencySec + rttSec / 2;
+      const localAudibleNow = localAudioNow + localLatencySec;
+      newOffsetAudio = leaderAudibleAtT3 - localAudibleNow;
     }
     addOffsetSample(newOffsetAudio, rtt);
     return;
@@ -416,6 +427,9 @@ function broadcastLeader(excludePeer) {
 }
 
 function broadcastState(excludePeer) {
+  if (isLeader()) {
+    currentState.leaderOutputLatencySec = getOutputLatencySec();
+  }
   if (isHub) {
     peer.connections &&
       Object.values(peer.connections).forEach((arr) =>
@@ -469,12 +483,11 @@ function connectToLeader(id) {
   pllOffsetSec = 0;
   pllSkewSecPerSec = 0;
   pllLastUpdateMs = null;
-  setOffsetStatus('Sync: connecting…');
+  setOffsetStatus('Offset: —');
   setSyncStatus('Sync: connecting…');
 
   directLeaderConn = peer.connect(id, { reliable: true });
   directLeaderConn.on('open', () => {
-    setOffsetStatus('Sync: calibrating…');
     setSyncStatus('Sync: calibrating…');
     startContinuousSync(); // Start the continuous sync
     startCalibrationTimer();
@@ -484,7 +497,6 @@ function connectToLeader(id) {
     stopPing();
     stopContinuousSync();
     stopCalibrationTimer();
-    setOffsetStatus('Sync: disconnected');
     setSyncStatus('Sync: disconnected');
     startBtn.disabled = true;
     calibrateBtn.disabled = true;
@@ -501,7 +513,7 @@ function startContinuousSync() {
     if (!lastOffsetSampleMs) return;
     const ageMs = performance.now() - lastOffsetSampleMs;
     if (ageMs > SYNC_STALE_MS) {
-      setOffsetStatus('Sync: stale, resyncing…');
+      setSyncStatus('Sync: stale, resyncing…');
       pingIntervalMs = 150;
       startPing(pingIntervalMs);
       startCalibrationTimer();
@@ -578,14 +590,29 @@ function recalcFromLeaderTime() {
   if (!isLeader() && offsetSamples.length === 0) return;
 
   if (!audioCtx || !currentState.playing || currentState.startAtLeaderAudio === null) return;
-  const localAudioNow = audioCtx.currentTime + getOffsetAudioSec();
   const beatSec = 60 / currentState.bpm;
-  const elapsed = localAudioNow - currentState.startAtLeaderAudio;
+  if (isLeader()) {
+    const localAudioNow = audioCtx.currentTime;
+    const elapsed = localAudioNow - currentState.startAtLeaderAudio;
+    const beatNumber = Math.max(0, Math.floor(elapsed / beatSec));
+    currentBeatIndex = beatNumber % currentState.beatsPerBar;
+    const beatStartLeader = currentState.startAtLeaderAudio + beatNumber * beatSec;
+    const offsetSec = beatStartLeader - localAudioNow;
+    nextBeatTime = audioCtx.currentTime + Math.max(0, offsetSec);
+    return;
+  }
+  const leaderLatencySec = Number.isFinite(currentState.leaderOutputLatencySec)
+    ? currentState.leaderOutputLatencySec
+    : 0;
+  const localLatencySec = getOutputLatencySec();
+  const localAudibleNow = audioCtx.currentTime + localLatencySec + getOffsetAudioSec();
+  const leaderStartAudible = currentState.startAtLeaderAudio + leaderLatencySec;
+  const elapsed = localAudibleNow - leaderStartAudible;
   const beatNumber = Math.max(0, Math.floor(elapsed / beatSec));
   currentBeatIndex = beatNumber % currentState.beatsPerBar;
-  const beatStartLeader = currentState.startAtLeaderAudio + beatNumber * beatSec;
-  const offsetSec = beatStartLeader - localAudioNow;
-  nextBeatTime = audioCtx.currentTime + Math.max(0, offsetSec);
+  const beatStartAudible = leaderStartAudible + beatNumber * beatSec;
+  const offsetSec = beatStartAudible - localAudibleNow;
+  nextBeatTime = audioCtx.currentTime + Math.max(0, offsetSec - localLatencySec);
 }
 
 function schedulerTick() {
@@ -857,7 +884,7 @@ function finishCalibration() {
       startPlayback(currentState.startAtLeaderAudio);
       pendingPlayback = false;
     } else {
-      setOffsetStatus('Sync: waiting for leader…');
+      setSyncStatus('Sync: waiting for leader…');
     }
   }
 
@@ -920,7 +947,6 @@ function runCalibration() {
   calibrateBtn.textContent = 'Calibrating…';
   calibrateBtn.disabled = true;
   startBtn.disabled = true;
-  setOffsetStatus('Sync: calibrating…');
   setSyncStatus('Sync: calibrating…');
   isCalibrating = true;
   syncQuality = 'unknown';

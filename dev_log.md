@@ -34,6 +34,8 @@
     - Followers keep playing while a resync burst runs; no automatic pause.
 - **Sync Status UI**:
     - Added a dedicated sync status line (good/fair/poor and connection states).
+- **Audio Latency Compensation**:
+    - Included device output latency in sync offset calculations to better align audible clicks.
 - **Fixed Stop State**: Stop now clears `startAtLeaderAudio` (was incorrectly clearing `startAtLeader`).
 - **Fixed Leader Start**: The `startPlayback` function is now correctly called for the leader in the `startBtn.addEventListener`.
 - **Fixed Start Button for Leader**: The start button is now correctly enabled for the leader after calibration.

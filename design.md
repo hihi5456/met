@@ -34,6 +34,7 @@
 - **Stale Sync Recovery**: If offset samples stop arriving, the client triggers an automatic resync burst.
 - **Stale Sync Behavior**: Followers keep playing while a resync burst runs; no automatic pause.
 - **Sync Status UI**: Separate sync status text communicates connection and quality.
+- **Audio Latency Compensation**: Sync uses device output latency when available to align audible clicks across devices.
 - **Leader Broadcast**: Leader sends `{bpm, beatsPerBar, leadInMs, startAtLeaderAudio}` via hub; `startAtLeaderAudio` is leader audio-clock time.
 - **Start/Recover**: Followers only start after offset samples exist, then compute beat index from elapsed leader-audio time.
 - **Fault Tolerance**: Leader is fixed to the hub; if it disconnects, the room must reconnect to elect a new hub/leader.
