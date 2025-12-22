@@ -38,6 +38,10 @@ let offsetAudioSec = 0;
 let pingIntervalMs = 450;
 let offsetSamples = []; // Stores objects like { offset: number, rtt: number }
 const MAX_OFFSET_SAMPLES = 50; // Number of samples to keep in the sliding window
+const MIN_OFFSET_SAMPLES = 3;
+let pllOffsetSec = 0;
+let pllSkewSecPerSec = 0;
+let pllLastUpdateMs = null;
 
 // Tap tempo state
 let tapHistory = [];
@@ -125,7 +129,7 @@ stopBtn.addEventListener('click', () => {
   }
   stopPlayback();
   currentState.playing = false;
-  currentState.startAtLeader = null;
+  currentState.startAtLeaderAudio = null;
   broadcastState();
 });
 
@@ -329,23 +333,37 @@ function handleMessage(conn, msg) {
   }
 
   if (data.type === 'ping' && isLeader()) {
+    const t1 = performance.now() + serverTimeOffset;
     ensureAudio();
+    const leaderAudioTime = audioCtx.currentTime;
+    const t2 = performance.now() + serverTimeOffset;
     send(conn, {
       type: 'pong',
       t0: data.t0,
-      leaderNow: performance.now() + serverTimeOffset,
-      leaderAudioTime: audioCtx.currentTime,
+      t1,
+      t2,
+      leaderAudioTime,
     });
     return;
   }
 
   if (data.type === 'pong' && directLeaderConn && conn.peer === directLeaderConn.peer) {
-    const t1 = performance.now() + serverTimeOffset;
-    const rtt = t1 - data.t0;
+    const t3 = performance.now() + serverTimeOffset;
+    const rtt = t3 - data.t0;
     const rttSec = rtt / 1000;
     ensureAudio();
     const localAudioNow = audioCtx.currentTime;
-    const newOffsetAudio = data.leaderAudioTime - (localAudioNow + rttSec / 2);
+    let newOffsetAudio;
+    if (Number.isFinite(data.t1) && Number.isFinite(data.t2)) {
+      // NTP-style offset in perf clock, then map leader audio time to receive instant.
+      const offsetPerf = ((data.t1 - data.t0) + (data.t2 - t3)) / 2;
+      const leaderTimeAtT3 = t3 + offsetPerf;
+      const leaderAudioAtT3 = data.leaderAudioTime + (leaderTimeAtT3 - data.t2) / 1000;
+      newOffsetAudio = leaderAudioAtT3 - localAudioNow;
+    } else {
+      // Fallback to simple RTT/2 estimate.
+      newOffsetAudio = data.leaderAudioTime + rttSec / 2 - localAudioNow;
+    }
     addOffsetSample(newOffsetAudio, rtt);
     return;
   }
@@ -428,10 +446,14 @@ function connectToLeader(id) {
     stopPing();
   }
   offsetSamples.length = 0;
-  setOffsetStatus('Calibrating…');
+  pllOffsetSec = 0;
+  pllSkewSecPerSec = 0;
+  pllLastUpdateMs = null;
+  setOffsetStatus('Sync: connecting…');
 
   directLeaderConn = peer.connect(id, { reliable: true });
   directLeaderConn.on('open', () => {
+    setOffsetStatus('Sync: calibrating…');
     startContinuousSync(); // Start the continuous sync
     startCalibrationTimer();
   });
@@ -440,6 +462,7 @@ function connectToLeader(id) {
     stopPing();
     stopContinuousSync();
     stopCalibrationTimer();
+    setOffsetStatus('Sync: disconnected');
     startBtn.disabled = true;
     calibrateBtn.disabled = true;
     calibrateBtn.textContent = 'Calibrate';
@@ -517,7 +540,7 @@ function recalcFromLeaderTime() {
   if (!isLeader() && offsetSamples.length === 0) return;
 
   if (!audioCtx || !currentState.playing || currentState.startAtLeaderAudio === null) return;
-  const localAudioNow = audioCtx.currentTime + offsetAudioSec;
+  const localAudioNow = audioCtx.currentTime + getOffsetAudioSec();
   const beatSec = 60 / currentState.bpm;
   const elapsed = localAudioNow - currentState.startAtLeaderAudio;
   const beatNumber = Math.max(0, Math.floor(elapsed / beatSec));
@@ -575,7 +598,7 @@ function startVisualLoop() {
   stopVisualLoop();
   const loop = () => {
     if (!audioCtx || !currentState.playing || currentState.startAtLeaderAudio === null) return;
-    const localAudioNow = audioCtx.currentTime + offsetAudioSec;
+    const localAudioNow = audioCtx.currentTime + getOffsetAudioSec();
     const beatSec = 60 / currentState.bpm;
     const elapsed = localAudioNow - currentState.startAtLeaderAudio;
     if (elapsed >= 0) {
@@ -607,11 +630,20 @@ function setLeaderStatus(text) {
 }
 
 function setOffsetStatus(offset) {
-  if (Number.isFinite(offset)) {
+  if (typeof offset === 'string') {
+    offsetStatus.textContent = offset;
+  } else if (Number.isFinite(offset)) {
     offsetStatus.textContent = `Offset: ${Math.round(offset)} ms`;
   } else {
     offsetStatus.textContent = 'Offset: —';
   }
+}
+
+function getOffsetAudioSec() {
+  if (!pllLastUpdateMs) return offsetAudioSec;
+  const nowMs = performance.now();
+  const dtSec = (nowMs - pllLastUpdateMs) / 1000;
+  return offsetAudioSec + pllSkewSecPerSec * dtSec;
 }
 
 function addOffsetSample(newOffsetAudioSec, rtt) {
@@ -620,9 +652,14 @@ function addOffsetSample(newOffsetAudioSec, rtt) {
     offsetSamples.shift();
   }
 
-  if (offsetSamples.length < 3) {
+  let targetOffsetAudioSec;
+  if (offsetSamples.length < MIN_OFFSET_SAMPLES) {
     const sum = offsetSamples.reduce((acc, s) => acc + s.offset, 0);
-    offsetAudioSec = sum / offsetSamples.length;
+    targetOffsetAudioSec = sum / offsetSamples.length;
+    offsetAudioSec = targetOffsetAudioSec;
+    pllOffsetSec = offsetAudioSec;
+    pllSkewSecPerSec = 0;
+    pllLastUpdateMs = performance.now();
     offsetMs = offsetAudioSec * 1000;
     setOffsetStatus(offsetMs);
     recalcFromLeaderTime();
@@ -643,12 +680,29 @@ function addOffsetSample(newOffsetAudioSec, rtt) {
   if (filteredSamples.length === 0) {
     const offsets = offsetSamples.map(s => s.offset).sort((a, b) => a - b);
     const medianOffset = offsets.length % 2 === 1 ? offsets[Math.floor(offsets.length / 2)] : (offsets[Math.floor(offsets.length / 2) - 1] + offsets[Math.floor(offsets.length / 2)]) / 2;
-    offsetAudioSec = medianOffset;
+    targetOffsetAudioSec = medianOffset;
   } else {
     const sumOffset = filteredSamples.reduce((acc, s) => acc + s.offset, 0);
-    offsetAudioSec = sumOffset / filteredSamples.length;
+    targetOffsetAudioSec = sumOffset / filteredSamples.length;
   }
 
+  // PLL-style update to track offset and drift.
+  const nowMs = performance.now();
+  if (pllLastUpdateMs === null) {
+    pllOffsetSec = targetOffsetAudioSec;
+    pllSkewSecPerSec = 0;
+    pllLastUpdateMs = nowMs;
+  } else {
+    const dtSec = Math.max(0.05, (nowMs - pllLastUpdateMs) / 1000);
+    const predicted = pllOffsetSec + pllSkewSecPerSec * dtSec;
+    const error = targetOffsetAudioSec - predicted;
+    const kp = 0.2;
+    const ki = 0.02;
+    pllOffsetSec = predicted + kp * error;
+    pllSkewSecPerSec = pllSkewSecPerSec + ki * error;
+    pllLastUpdateMs = nowMs;
+  }
+  offsetAudioSec = pllOffsetSec;
   offsetMs = offsetAudioSec * 1000;
   setOffsetStatus(offsetMs);
   recalcFromLeaderTime();
@@ -676,6 +730,9 @@ function teardown() {
   bpmInput.disabled = false;
   beatsInput.disabled = false;
   offsetSamples.length = 0;
+  pllOffsetSec = 0;
+  pllSkewSecPerSec = 0;
+  pllLastUpdateMs = null;
   setOffsetStatus('Offset: —');
 }
 
@@ -699,8 +756,12 @@ function finishCalibration() {
   startPing(pingIntervalMs);
 
   if (pendingPlayback && currentState.startAtLeaderAudio) {
-    startPlayback(currentState.startAtLeaderAudio);
-    pendingPlayback = false;
+    if (isLeader() || offsetSamples.length > 0) {
+      startPlayback(currentState.startAtLeaderAudio);
+      pendingPlayback = false;
+    } else {
+      setOffsetStatus('Sync: waiting for leader…');
+    }
   }
 
   calibrateBtn.textContent = 'Calibrated';
@@ -746,6 +807,9 @@ function runCalibration() {
   if (isLeader()) {
     offsetMs = 0;
     offsetAudioSec = 0;
+    pllOffsetSec = 0;
+    pllSkewSecPerSec = 0;
+    pllLastUpdateMs = performance.now();
     setOffsetStatus(offsetMs);
     calibrateBtn.textContent = 'Calibrated';
     calibrateBtn.disabled = false;
@@ -756,7 +820,11 @@ function runCalibration() {
   calibrateBtn.textContent = 'Calibrating…';
   calibrateBtn.disabled = true;
   startBtn.disabled = true;
+  setOffsetStatus('Sync: calibrating…');
   offsetSamples.length = 0;
+  pllOffsetSec = 0;
+  pllSkewSecPerSec = 0;
+  pllLastUpdateMs = null;
   pingIntervalMs = 150;
   startPing(pingIntervalMs);
   startCalibrationTimer();
