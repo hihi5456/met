@@ -24,3 +24,9 @@ Minimal multi-user metronome that syncs over the same Wi‑Fi using WebRTC with 
 ## Files
 - `index.html`, `style.css`, `client.js` – build-free client UI/logic; loads PeerJS from CDN.
 - `server.js` – optional static file server for local dev only (not needed on GitHub Pages).
+
+## Sync notes
+- Leader is fixed to the room hub (first device in the room) to avoid extra hops and jitter.
+- Followers use an NTP-style ping/pong plus a lightweight PLL to track clock offset and drift.
+- Playback is blocked for followers until a valid offset sample is available.
+- If direct leader sync fails (e.g., NAT issues), followers will show a sync status and should not start.

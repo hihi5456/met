@@ -20,7 +20,7 @@
 ## Architecture
 - **Signaling**: PeerJS cloud signaling via CDN script + default PeerJS server; no deployment needed.
   - Deterministic room hub ID: `metronome-<room>-hub`; first to claim becomes hub. Others connect to hub.
-  - Hub relays leader/state messages to all peers; hub can also be leader but any peer may take leadership.
+  - Hub is the fixed leader to minimize hops and jitter; leader changes require reconnecting so the new leader joins first.
 - **Client (Browser)**: Single-page HTML/JS (no framework, no build step).
   - WebRTC data channel (via PeerJS) to hub; direct channel to leader for ping/pong clock offset.
   - Leader broadcast: tempo, time signature, start time (leader clock); followers convert via offset and schedule audio.
@@ -28,10 +28,15 @@
   - Web Audio API scheduler with short look-ahead; visual grid stays in sync.
 
 ## Sync Strategy
-- **Clock Alignment**: Followers ping/pong the leader over a direct data channel to estimate RTT/2 offset to the leader’s `performance.now()`. A short calibration burst runs before Start; periodic pings keep offset fresh.
-- **Leader Broadcast**: Leader sends `{bpm, beatsPerBar, leadInMs, startAtLeader}` via hub; `startAtLeader` is leader-clock time.
-- **Start/Recover**: Followers convert `startAtLeader` using their offset, schedule ahead, and if they join mid-loop recompute beat index from elapsed time.
-- **Fault Tolerance**: Any peer may press “Become leader”; hub relays the new leader ID to the room.
+- **Clock Alignment**: Followers ping/pong the leader over a direct data channel using NTP-style timestamps (t0/t1/t2/t3) and map leader `AudioContext` time to their local clock. A short calibration burst runs before Start; periodic pings keep offset fresh.
+- **Drift Tracking**: A lightweight PLL (PI controller) smooths offset updates and tracks drift between devices.
+- **Outlier Rejection**: Offset samples are filtered using RTT percentile and MAD (median absolute deviation) to reduce jitter spikes.
+- **Stale Sync Recovery**: If offset samples stop arriving, the client triggers an automatic resync burst.
+- **Stale Sync Behavior**: Followers keep playing while a resync burst runs; no automatic pause.
+- **Sync Status UI**: Separate sync status text communicates connection and quality.
+- **Leader Broadcast**: Leader sends `{bpm, beatsPerBar, leadInMs, startAtLeaderAudio}` via hub; `startAtLeaderAudio` is leader audio-clock time.
+- **Start/Recover**: Followers only start after offset samples exist, then compute beat index from elapsed leader-audio time.
+- **Fault Tolerance**: Leader is fixed to the hub; if it disconnects, the room must reconnect to elect a new hub/leader.
 
 ## Tap Tempo Logic
 - A "Tap" button will be added to the UI.
